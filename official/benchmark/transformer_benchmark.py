@@ -43,7 +43,7 @@ class TransformerBenchmark(PerfZeroBenchmark):
   """
 
   def __init__(self, output_dir=None, default_flags=None, root_data_dir=None,
-               flag_methods=None):
+               flag_methods=None, tpu=None):
     assert tf.version.VERSION.startswith('2.')
     root_data_dir = root_data_dir if root_data_dir else ''
 
@@ -70,7 +70,8 @@ class TransformerBenchmark(PerfZeroBenchmark):
     super(TransformerBenchmark, self).__init__(
         output_dir=output_dir,
         default_flags=default_flags,
-        flag_methods=flag_methods)
+        flag_methods=flag_methods,
+        tpu=tpu)
 
   @benchmark_wrappers.enable_runtime_flags
   def _run_and_report_benchmark(self,
@@ -127,6 +128,12 @@ class TransformerBenchmark(PerfZeroBenchmark):
     if 'avg_exp_per_second' in stats:
       metrics.append({'name': 'avg_exp_per_second',
                       'value': stats['avg_exp_per_second']})
+
+    if 'step_timestamp_log' in stats:
+      metrics.append({
+          'name': 'startup_time',
+          'value': stats['step_timestamp_log'][0].timestamp - start_time_sec
+      })
 
     flags_str = flags_core.get_nondefault_flags_as_str()
     self.report_benchmark(iters=-1, wall_time=wall_time_sec, metrics=metrics,
@@ -430,13 +437,14 @@ class TransformerKerasBenchmark(TransformerBenchmark):
   """Benchmarks for Transformer (Base and Big) using Keras."""
 
   def __init__(self, output_dir=None, default_flags=None,
-               root_data_dir=None, batch_per_gpu=4096):
+               root_data_dir=None, tpu=None, batch_per_gpu=4096):
     """Initialize.
 
     Args:
       output_dir: Based directory for saving artifacts, e.g. checkpoints.
       default_flags: default flags to use for all tests.
       root_data_dir: root directory for data, e.g. training.
+      tpu: if benchmark runs on TPU, the name of the TPU.
       batch_per_gpu: batch size to use per gpu.
     """
     flag_methods = [misc.define_transformer_flags]
@@ -446,7 +454,8 @@ class TransformerKerasBenchmark(TransformerBenchmark):
         output_dir=output_dir,
         default_flags=default_flags,
         root_data_dir=root_data_dir,
-        flag_methods=flag_methods)
+        flag_methods=flag_methods,
+        tpu=tpu)
 
   def benchmark_1_gpu_no_dist_strat(self):
     """Benchmark 1 gpu without distribution strategy."""
@@ -650,11 +659,27 @@ class TransformerKerasBenchmark(TransformerBenchmark):
     self._run_and_report_benchmark(total_batch_size=FLAGS.batch_size,
                                    log_steps=FLAGS.log_steps)
 
+  def benchmark_2x2_tpu_fp16(self):
+    """Benchmark 2x2 tpu."""
+    self._setup()
+    FLAGS.distribution_strategy = 'tpu'
+    FLAGS.dtype = 'bf16'
+    FLAGS.batch_size = 6144
+    FLAGS.static_batch = True
+    FLAGS.max_length = 64
+    FLAGS.decode_batch_size = 32
+    FLAGS.decode_max_length = 97
+    FLAGS.padded_decode = True
+    FLAGS.use_ctl = True
+    FLAGS.model_dir = self._get_model_dir('benchmark_2x2_tpu_fp16')
+    self._run_and_report_benchmark(total_batch_size=FLAGS.batch_size,
+                                   log_steps=FLAGS.log_steps)
+
 
 class TransformerBaseKerasBenchmarkReal(TransformerKerasBenchmark):
   """Transformer based version real data benchmark tests."""
 
-  def __init__(self, output_dir=TMP_DIR, root_data_dir=TMP_DIR, **kwargs):
+  def __init__(self, output_dir=TMP_DIR, root_data_dir=TMP_DIR, tpu=None, **kwargs):
     def_flags = {}
     def_flags['param_set'] = 'base'
     def_flags['train_steps'] = 50
@@ -662,13 +687,13 @@ class TransformerBaseKerasBenchmarkReal(TransformerKerasBenchmark):
 
     super(TransformerBaseKerasBenchmarkReal, self).__init__(
         output_dir=output_dir, default_flags=def_flags,
-        root_data_dir=root_data_dir, batch_per_gpu=4096)
+        root_data_dir=root_data_dir, tpu=tpu, batch_per_gpu=4096)
 
 
 class TransformerBigKerasBenchmarkReal(TransformerKerasBenchmark):
   """Transformer based version real data benchmark tests."""
 
-  def __init__(self, output_dir=TMP_DIR, root_data_dir=TMP_DIR, **kwargs):
+  def __init__(self, output_dir=TMP_DIR, root_data_dir=TMP_DIR, tpu=None, **kwargs):
     def_flags = {}
     def_flags['param_set'] = 'big'
     def_flags['train_steps'] = 50
@@ -676,7 +701,7 @@ class TransformerBigKerasBenchmarkReal(TransformerKerasBenchmark):
 
     super(TransformerBigKerasBenchmarkReal, self).__init__(
         output_dir=output_dir, default_flags=def_flags,
-        root_data_dir=root_data_dir, batch_per_gpu=3072)
+        root_data_dir=root_data_dir, tpu=tpu, batch_per_gpu=3072)
 
 
 if __name__ == '__main__':

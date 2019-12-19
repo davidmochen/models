@@ -37,14 +37,15 @@ FLAGS = flags.FLAGS
 class CtlBenchmark(PerfZeroBenchmark):
   """Base benchmark class with methods to simplify testing."""
 
-  def __init__(self, output_dir=None, default_flags=None, flag_methods=None):
+  def __init__(self, output_dir=None, default_flags=None, flag_methods=None, tpu=None):
     self.output_dir = output_dir
     self.default_flags = default_flags or {}
     self.flag_methods = flag_methods or {}
     super(CtlBenchmark, self).__init__(
         output_dir=self.output_dir,
         default_flags=self.default_flags,
-        flag_methods=self.flag_methods)
+        flag_methods=self.flag_methods,
+        tpu=tpu)
 
   def _report_benchmark(self,
                         stats,
@@ -53,7 +54,8 @@ class CtlBenchmark(PerfZeroBenchmark):
                         top_1_min=None,
                         total_batch_size=None,
                         log_steps=None,
-                        warmup=1):
+                        warmup=1,
+                        start_time_sec=None):
     """Report benchmark results by writing to local protobuf file.
 
     Args:
@@ -64,6 +66,7 @@ class CtlBenchmark(PerfZeroBenchmark):
       total_batch_size: Global batch-size.
       log_steps: How often the log was created for stats['step_timestamp_log'].
       warmup: number of entries in stats['step_timestamp_log'] to ignore.
+      start_time_sec: the start time of the program in seconds since epoch.
     """
 
     metrics = []
@@ -98,6 +101,11 @@ class CtlBenchmark(PerfZeroBenchmark):
           'name': 'avg_exp_per_second',
           'value': stats['avg_exp_per_second']
       })
+
+    if start_time_sec and 'step_timestamp_log' in stats:
+      time_log = stats['step_timestamp_log']
+      # first entry in the time_log is start of step 1.
+      metrics.append({'name': 'startup_time', 'value': time_log[0].timestamp - start_time_sec})
 
     flags_str = flags_core.get_nondefault_flags_as_str()
     self.report_benchmark(
@@ -191,13 +199,14 @@ class Resnet50CtlAccuracy(CtlBenchmark):
 class Resnet50CtlBenchmarkBase(CtlBenchmark):
   """Resnet50 benchmarks."""
 
-  def __init__(self, output_dir=None, default_flags=None):
+  def __init__(self, output_dir=None, default_flags=None, tpu=None):
     flag_methods = [common.define_keras_flags]
 
     super(Resnet50CtlBenchmarkBase, self).__init__(
         output_dir=output_dir,
         flag_methods=flag_methods,
-        default_flags=default_flags)
+        default_flags=default_flags,
+        tpu=tpu)
 
   @benchmark_wrappers.enable_runtime_flags
   def _run_and_report_benchmark(self):
@@ -214,7 +223,8 @@ class Resnet50CtlBenchmarkBase(CtlBenchmark):
         wall_time_sec,
         total_batch_size=FLAGS.batch_size,
         log_steps=FLAGS.log_steps,
-        warmup=warmup)
+        warmup=warmup,
+        start_time_sec=start_time_sec)
 
   def benchmark_1_gpu_no_dist_strat(self):
     """Test Keras model with 1 GPU, no distribution strategy."""
@@ -343,6 +353,48 @@ class Resnet50CtlBenchmarkBase(CtlBenchmark):
     FLAGS.enable_xla = True
     self._run_and_report_benchmark()
 
+  def benchmark_2x2_tpu_fp16(self):
+    """Test Keras model with 2x2 TPU, fp16."""
+    self._setup()
+
+    FLAGS.dtype = 'bf16'
+    FLAGS.distribution_strategy = 'tpu'
+    FLAGS.model_dir = self._get_model_dir('benchmark_2x2_tpu_fp16')
+    FLAGS.batch_size = 1024
+    FLAGS.enable_eager = True
+    FLAGS.single_l2_loss_op = True
+    FLAGS.use_tf_function = True
+    FLAGS.train_steps = 1000
+    FLAGS.steps_per_loop = 500
+    FLAGS.log_steps = 1
+    self._run_and_report_benchmark()
+
+  def benchmark_4x4_tpu_fp16(self):
+    """Test Keras model with 4x4 TPU, fp16."""
+    self._setup()
+
+    FLAGS.dtype = 'bf16'
+    FLAGS.distribution_strategy = 'tpu'
+    FLAGS.model_dir = self._get_model_dir('benchmark_4x4_tpu_fp16')
+    FLAGS.batch_size = 4096
+    FLAGS.enable_eager = True
+    FLAGS.single_l2_loss_op = True
+    FLAGS.use_tf_function = True
+    self._run_and_report_benchmark()
+
+  def benchmark_8x8_tpu_fp16(self):
+    """Test Keras model with 8x8 TPU, fp16."""
+    self._setup()
+
+    FLAGS.dtype = 'bf16'
+    FLAGS.distribution_strategy = 'tpu'
+    FLAGS.model_dir = self._get_model_dir('benchmark_8x8_tpu_fp16')
+    FLAGS.batch_size = 16384
+    FLAGS.enable_eager = True
+    FLAGS.single_l2_loss_op = True
+    FLAGS.use_tf_function = True
+    self._run_and_report_benchmark()
+
   def fill_report_object(self, stats):
     super(Resnet50CtlBenchmarkBase, self).fill_report_object(
         stats, total_batch_size=FLAGS.batch_size, log_steps=FLAGS.log_steps)
@@ -351,7 +403,7 @@ class Resnet50CtlBenchmarkBase(CtlBenchmark):
 class Resnet50CtlBenchmarkSynth(Resnet50CtlBenchmarkBase):
   """Resnet50 synthetic benchmark tests."""
 
-  def __init__(self, output_dir=None, root_data_dir=None, **kwargs):
+  def __init__(self, output_dir=None, root_data_dir=None, tpu=None, **kwargs):
     def_flags = {}
     def_flags['skip_eval'] = True
     def_flags['use_synthetic_data'] = True
@@ -359,13 +411,13 @@ class Resnet50CtlBenchmarkSynth(Resnet50CtlBenchmarkBase):
     def_flags['log_steps'] = 10
 
     super(Resnet50CtlBenchmarkSynth, self).__init__(
-        output_dir=output_dir, default_flags=def_flags)
+        output_dir=output_dir, default_flags=def_flags, tpu=tpu)
 
 
 class Resnet50CtlBenchmarkReal(Resnet50CtlBenchmarkBase):
   """Resnet50 real data benchmark tests."""
 
-  def __init__(self, output_dir=None, root_data_dir=None, **kwargs):
+  def __init__(self, output_dir=None, root_data_dir=None, tpu=None, **kwargs):
     def_flags = {}
     def_flags['skip_eval'] = True
     def_flags['data_dir'] = os.path.join(root_data_dir, 'imagenet')
@@ -373,7 +425,7 @@ class Resnet50CtlBenchmarkReal(Resnet50CtlBenchmarkBase):
     def_flags['log_steps'] = 10
 
     super(Resnet50CtlBenchmarkReal, self).__init__(
-        output_dir=output_dir, default_flags=def_flags)
+        output_dir=output_dir, default_flags=def_flags, tpu=tpu)
 
 
 if __name__ == '__main__':
